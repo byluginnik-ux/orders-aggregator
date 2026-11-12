@@ -9,6 +9,8 @@ const ExternalOrder = z.object({
   id: z.string().min(1),
   customerId: z.string().min(1),
   amount: z.union([z.number(), z.string()]),
+  discountPercent: z.union([z.number(), z.string()]).nullish(),
+  amountPaid: z.union([z.number(), z.string()]).nullish(),
   status: z.enum(["pending", "paid", "refunded"]),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -24,10 +26,18 @@ export class OrdersService {
     if (!parsed.success) throw new ValidationError(`invalid order: ${parsed.error.issues.map((i) => i.path.join(".")).join(", ")}`);
     const o = parsed.data;
     try {
+      const amountKop = toKop(parseRub(o.amount));
       return {
         id: o.id,
         customerId: o.customerId,
-        amountKop: toKop(parseRub(o.amount)),
+        amountKop,
+        // Источник истины — amountPaid; если его нет, а процент есть — считаем от суммы
+        amountPaidKop:
+          o.amountPaid != null
+            ? toKop(parseRub(o.amountPaid))
+            : o.discountPercent != null
+              ? Math.round((amountKop * (100 - parseRub(o.discountPercent))) / 100)
+              : null,
         status: o.status,
         createdAt: parseUtc(o.createdAt),
         updatedAt: parseUtc(o.updatedAt),
