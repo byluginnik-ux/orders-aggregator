@@ -6,6 +6,10 @@ import type { CustomersService } from "./customers.js";
 export interface DailyTotal {
   date: string;
   total: number;
+  /** gross, discount, net — только для дней, по которым есть данные о скидке. */
+  gross?: number;
+  discount?: number;
+  net?: number;
 }
 
 const DAY = 86_400_000;
@@ -17,7 +21,9 @@ export class TotalsService {
   ) {}
 
   /**
-   * Сумма оплаченных заказов клиента по дням в его таймзоне, from..to включительно.
+   * Сумма оплаченных заказов клиента по дням в его таймзоне, from..to включительно:
+   * gross — до скидки, net — фактически заплачено, discount = gross - net, total = gross (совместимость).
+   * gross, discount, net отдаются для дня, если хотя бы по одному его заказу есть данные о скидке.
    * Дни без оплат — с нулём.
    */
   async daily(customerId: string, from: string, to: string): Promise<DailyTotal[]> {
@@ -30,13 +36,20 @@ export class TotalsService {
       new Date(Date.parse(`${to}T00:00:00Z`) + 2 * DAY),
     );
 
-    const sums = new Map(datesBetween(from, to).map((d) => [d, 0]));
+    const sums = new Map(datesBetween(from, to).map((d) => [d, { gross: 0, net: 0, known: false }]));
     for (const o of rows) {
       // Смещение — на момент заказа: внутри периода может быть переход на летнее/зимнее время
-      const date = dateAtOffset(o.createdAt, tzOffsetMinutes(timezone, o.createdAt));
-      const cur = sums.get(date);
-      if (cur !== undefined) sums.set(date, cur + o.amountKop);
+      const day = sums.get(dateAtOffset(o.createdAt, tzOffsetMinutes(timezone, o.createdAt)));
+      if (!day) continue;
+      day.gross += o.amountKop;
+      day.net += o.amountPaidKop ?? o.amountKop;
+      day.known ||= o.amountPaidKop !== null;
     }
-    return [...sums].map(([date, kop]) => ({ date, total: fromKop(kop) }));
+    // Без данных о скидке ответ прежний ({ date, total }): существующие клиенты сравнивают его строго
+    return [...sums].map(([date, { gross, net, known }]) => ({
+      date,
+      total: fromKop(gross),
+      ...(known && { gross: fromKop(gross), discount: fromKop(gross - net), net: fromKop(net) }),
+    }));
   }
 }
